@@ -113,11 +113,33 @@ The model has identified 4 predictors: total_conditions, psych_care_entered, dri
 
 We will begin by examining baseline distributions of characteristics of our study sample. We need to ensure we only have full cases for the 4 identified predictors, which reduces our sample size down to n = 441.  
 
-```{r}
+```{r} 
+bipq %>%
+  summarise(
+    across(
+      c(total_conditions, psych_care_entered, driving_num, substance_use_num),
+      ~ sum(is.na(.)),
+      .names = "missing_{col}"
+    )
+  ) 
+bipq %>%
+  mutate(
+    n_missing = rowSums(across(
+      c(total_conditions, psych_care_entered, driving_num, substance_use_num),
+      ~ is.na(.)
+    ))
+  ) %>%
+  count(n_missing)
+
 bipq_nomiss <- bipq %>%
   drop_na(total_conditions, psych_care_entered, driving_num, substance_use_num)
  
-nrow(bipq_nomiss)
+nrow(bipq_nomiss) 
+``` 
+
+Now we can conduct our explanatory analysis, creating a table 1 and looking at the associations between each variable: 
+
+```{r}
 
 table1(~ total_score + gender + race_binary + disability + freqbaseline_monthly + total_conditions + t_onset_diagnosis + 
                 psych_care_entered + education3 + marital_status + driving + employment + insurance + suicidality + age + substance_use + veteran+ nes_es |score_level, data=bipq_nomiss)
