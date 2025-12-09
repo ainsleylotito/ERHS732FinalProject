@@ -1,0 +1,319 @@
+---
+title: "Analysis"
+author: "Ainsley Lotito"
+date: "2025-12-1"
+output: html_document
+---
+
+ 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE) 
+library(tidyverse)
+library(forcats)
+library(broom)
+library(psych)
+library(ggplot2)
+library(knitr) 
+library(table1)
+library(naniar) 
+library(ggpubr)  
+library(dplyr)
+library(MASS)
+library(gtsummary)
+library(ggplot2) 
+library(equatiomatic) 
+library(sandwich)
+library(lmtest)
+```
+
+We will begin by reading in our study sample. We will be using the dataset bipq_clean.csv from the `/data` folder, which was previously cleaned in the DataCleaning.Rmd file in the `/writing` folder. 
+
+```{r}
+bipq <- read.csv("../data/bipq_clean.csv") 
+
+#making a 0 or 1 indicator for score_level 
+bipq <- bipq %>% 
+  mutate(
+    score_level = case_when(
+      total_score < 50 ~ 0,
+      total_score >= 50 ~ 1
+    ),
+    score_level = factor(score_level,
+                         levels = c(0, 1),
+                         labels = c("Low/Moderate", "High"))
+  )
+
+```
+# Numeric Analysis
+
+For this analysis, the outcome variable of total_score will be treated as a "high" score vs "not high" ("moderate" and "low") threshold. These cutoff values come from a validation study on patients with a recently acquired spinal cord injury https://pubmed.ncbi.nlm.nih.gov/34818113/ , with scoring as low: <42, moderate: 42-49, and above 50 as high. 
+
+We will therefore categorize "score categories" as follows: 
+0 = Low/Moderate, total_score less than 50 
+1 = High score, total_score greater than or equal to 50
+
+## Description of variables 
+
+For Analysis 1, we will investigate whether anything is associated with BIPQ total score.  
+
+The **outcome** variable will be **BIPQ score level**, a binary variable: "high" vs "not high". This variable is called `score_level`.
+
+The **predictors** that will be evaluated include: 
+
+1. gender 
+2. comorbid epilepsy 
+3. veteran status 
+4. substance use 
+5. suicidality 
+6. driving status 
+7. marital status 
+8. education 
+9. behavioral care provider at entry 
+10. time between onset and diagnosis 
+11. health insurance coverage 
+12. race 
+13. disability status 
+14. total number of comorbidities 
+15. baseline frequency of seizures 
+16. employment status
+ 
+For Analysis 2, we will investigate whether BIPQ scores can be used to predict treatment adherence.  
+
+The **outcome** will be **treatment adherence**, which we will explore with different variables in two models. The first model will use **psych adherence**, a binary variable that indicates whether the patient attended their psychological follow up. The second model will use **visit attendance** with the variable `visit_complete_50`, another binary variable that indicates whether patients attended at least 50% of their scheduled appointments or less than 50%.  
+
+**Note: Before conducting exploratory analysis, we are going to fit the first model with stepwise selection excluding all missing data. Once we have the relevant predictors identified, we are going to go back in and re-run the model only excluding the cases that are missing data on our key covariates. Below is the code used to identify the key predictors for model 1. After this process, the analysis picks up with our new sample** 
+
+```{r}
+#only full cases for my model
+bipq_nomiss <- bipq %>%
+  drop_na(score_level,
+          gender, race_binary, disability, freqbaseline_monthly,
+          total_conditions, t_onset_diagnosis, psych_care_entered,
+          education3, marital_status, driving_num, employment, insurance,
+          suicidality, age, total_aed, substance_use_num, veteran, nes_es)
+ 
+nrow(bipq_nomiss)
+
+#checking which level is referent for score_level 
+levels(bipq_nomiss$score_level)
+
+full.model1 <- glm(score_level ~ gender + race_binary + disability + freqbaseline_monthly + total_conditions + t_onset_diagnosis + 
+                psych_care_entered + education3 + marital_status + driving_num + employment + insurance + suicidality + age + total_aed + substance_use_num + veteran+ nes_es,
+                   data = bipq_nomiss,
+                   family = binomial)
+step.model1 <- stepAIC(full.model1, direction = "both", trace = FALSE)
+
+summary(step.model1)  
+model_tidy1 <- tidy(step.model1, conf.int = TRUE)
+model_tidy1 
+```
+The model has identified 4 predictors: total_conditions, psych_care_entered, driving_num, and substance_use_num. We are therefore going to proceed by filtering out the number of observations with missing data on those covariates, and continue our analysis. 
+
+## Exploratory analysis 
+
+We will begin by examining baseline distributions of characteristics of our study sample. We need to ensure we only have full cases for the 4 identified predictors, which reduces our sample size down to n = 441.  
+
+```{r}
+bipq_nomiss <- bipq %>%
+  drop_na(total_conditions, psych_care_entered, driving_num, substance_use_num)
+ 
+nrow(bipq_nomiss)
+
+table1(~ total_score + gender + race_binary + disability + freqbaseline_monthly + total_conditions + t_onset_diagnosis + 
+                psych_care_entered + education3 + marital_status + driving + employment + insurance + suicidality + age + substance_use + veteran+ nes_es |score_level, data=bipq_nomiss)
+
+#chi square and t tests for table 1
+t.test(freqbaseline_monthly ~ score_level, data=bipq_nomiss)
+t.test(age ~ score_level, data=bipq_nomiss)
+t.test(total_conditions ~ score_level, data=bipq_nomiss)
+t.test(t_onset_diagnosis ~ score_level, data=bipq_nomiss)
+t.test(total_aed ~ score_level, data=bipq_nomiss)
+chisq.test(table(bipq_nomiss$nes_es, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$gender, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$race_binary, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$disability, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$psych_care_entered, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$education3, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$marital_status, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$driving, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$employment, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$insurance, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$suicidality, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$substance_use, bipq_nomiss$score_level))
+chisq.test(table(bipq_nomiss$veteran, bipq_nomiss$score_level))
+ 
+``` 
+Next, I want to explore the distribution of my outcome of treatment adherence, using the proportion of visits attended. Let's look at the distribution of the whole sample first, then look at the distribution by each BIPQ Score Group. 
+
+```{r, fig.width= 6, fig.height=5}
+ggplot(bipq_nomiss, aes(visit_prop))+
+  geom_histogram(binwidth = 0.05)+
+  labs(x= "Proportion of Visits Attended to Visits Scheduled",
+       y = "Number of Patients",
+       main = "Distribution of Scheduled-Visit Attendance Proportions")+ 
+  theme_classic()
+
+#finding means
+bipq_nomiss %>%
+  group_by(score_level) %>%
+  summarise(mean_prop = mean(visit_prop),
+            sd_prop   = sd(visit_prop))
+
+#ploting each group
+ggplot(bipq_nomiss, aes(visit_prop)) +
+  geom_histogram(binwidth = 0.05) +
+  facet_grid(score_level ~ .) +
+  labs(
+    x = "Proportion of Visits Attended to Visits Scheduled",
+    y = "Number of Patients",
+    title = "Distribution of Scheduled-Visit Attendance Proportions"
+  ) +
+  theme_classic()
+
+
+```
+
+## Analysis 1 
+
+Analysis 1 will fit a binary logistic regression model to evaluate which predictors are associated with high vs low scores. 
+*Note* I will be using the numeric version of substance use and driving from now on, not the factor one. 
+
+## Model 1 
+
+As previously explained, model 1 will fit the relevant predictors identified from the stepwise model. 
+
+```{r}
+mod1 <- glm(score_level ~  total_conditions +  
+                psych_care_entered + driving_num + substance_use_num,
+                   data = bipq_nomiss,
+                   family = binomial)
+summary(mod1)
+
+model_tidy1 <- tidy(mod1, conf.int = TRUE)
+model_tidy_or <- model_tidy1 %>% 
+  mutate(
+    OR = exp(estimate),
+    OR_low = exp(conf.low),
+    OR_high = exp(conf.high)
+  )
+
+model_tidy_or %>% 
+  select(term, std.error, p.value, OR, OR_low, OR_high)
+``` 
+
+
+## Inverse Probability Weighting 
+
+Now that we have model 1 fit, we can use this information to create a weighting variable to use for model 2.  
+```{r}
+bipq_nomiss <- bipq_nomiss %>% 
+  mutate(ps = predict(mod1, type = "response")) #predictions in terms of
+#probability. add as new col in data 
+
+bipq_nomiss %>% 
+  select(score_cat, ps) #looking at just score category and their probability rating 
+``` 
+
+We can take a look at how the propensity socres vary across the high and low score groups: 
+```{r}
+bipq_nomiss %>% 
+  ggplot(aes(x = ps)) + 
+  geom_histogram() + 
+  facet_wrap(~ score_cat, ncol = 1) 
+``` 
+
+We are now going to create an inverse probability weight as a column in our data: 
+```{r}
+#adding inverse probability weight as a column in our data: 
+bipq_nomiss <- bipq_nomiss %>% 
+  mutate(w = if_else(score_level == 1, 1 / ps, 1 / (1 - ps)))  
+#if score_level =1, subject has a high score (exposure of interest), and weight equals 1/PS.
+# (else) score_level =0, subject is unexposed, and Weight equals 1/1-PS
+
+bipq_nomiss %>% 
+  select(score_level, ps, w) %>% 
+  head()
+ 
+bipq_nomiss %>% 
+  filter(w > 500)
+``` 
+
+Now, we are going to look at our variables of interest from the model and see how the difference between exposure groups may have changed after applying inverse weights: 
+
+```{r} 
+#this time, psych care, conditions, substance, driving (freq baseline went away!!)
+bipq_nomiss %>% 
+  group_by(score_level) %>% 
+  summarize(
+            mean_substance = mean(substance_use_num), 
+            wt_mean_substance = weighted.mean(substance_use_num, w = w),
+            
+            mean_driving = mean(driving_num), 
+            wt_mean_driving = weighted.mean(driving_num, w = w), 
+            
+            mean_conditions = mean(total_conditions), 
+             wt_mean_conditions = weighted.mean(total_conditions, w = w),
+            
+            mean_freq_baseline = mean(freqbaseline_monthly), 
+             wt_mean_freq_baseline = weighted.mean(freqbaseline_monthly, w = w)
+            )
+
+```  
+It looks like the weighting was successful in reducing the majority of the difference between observations. 
+
+We're going to look at the distribution of the inverse probability weights: 
+```{r}
+bipq_nomiss %>% 
+  summarize(mean_w = mean(w),
+            max_w = max(w),
+            min_w = min(w),
+            sum_w = sum(w)) 
+```
+Let's look just at age: 
+```{r}
+bipq_nomiss %>%
+  summarize(mean_age = mean(age),
+            mean_agew = (sum(age * w) / sum(w)))
+``` 
+Now that the weights are applied, the demographic and clinical characteristics that may result in differential bipq scores have been "accounted" for. We can now move onto analysis 2 and see if just the total sum score or the individual subscores are significantly related to visit attendance. 
+
+
+## Analysis 2 
+
+The second analysis will use **visit attendance** with the variable `visit_prop`, a numeric variable that represents the proportion of visits attended to those the patient was scheduled for.   
+
+We are going to start with the crude model, where we look at the association between visit proportions and BIPQ score level without applying the weights from our previous model.
+
+```{r} 
+#crude (unadjusted)
+crude_visit_mod <- glm(visit_prop ~ score_level,
+                 data = bipq_nomiss)
+summary(crude_visit_mod)  
+
+``` 
+
+Next, we are going to apply our weights, which we will report for Model 2. After we get the model fit, we need to create a cluster-robust covariance matrix, as our pseudopopulation essentially created extra observations in our data that did not previously exist, which makes our standard error deceptively small. To correct this, we will cluster based on each participant's unique ID to get the standard error that reflects the true number of observations in our data.
+
+```{r}
+
+#weighted
+visit_mod <- glm(visit_prop ~ score_level, weights = w,
+                 data = bipq_nomiss)
+summary(visit_mod) 
+
+#getting the equation for this model
+extract_eq(visit_mod) 
+
+#inflated std error: 
+
+# cluster-robust covariance matrix
+cov_cluster <- vcovCL(visit_mod, cluster = ~id)
+
+# table with robust SEs
+coeftest(visit_mod, vcov = cov_cluster)
+
+robust_mod <- coeftest(visit_mod, vcov = cov_cluster)
+tidy_robust <- tidy(robust_mod, conf.int = TRUE)
+tidy_robust
+```
+

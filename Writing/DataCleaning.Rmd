@@ -1,0 +1,466 @@
+---
+title: "DataCleaning"
+author: "Ainsley Lotito"
+date: "2025-11-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Cleaning
+
+All data have been de-identified. Data files are contained within the `data` subfolder of this project. 
+
+```{r, include=FALSE}
+library(readr) 
+library(tidyverse) 
+library(broom)
+library(gitcreds)     # Required for pushing to Git for Version Control
+library(readxl)       # Helps us read in excel docs sheet-by-sheet
+library(tidyverse)    # Creates cleaner code and better readability
+library(psych)        # Helpful for checking data distributions
+library(ggplot2)      # The best visualization package 
+library(plotly)       # Used for interactive charts from ggplot
+library(MVN)          # Helpful for checking assumptions in MLR
+library(stringr)      # Helpful for manipulating strings
+library(RColorBrewer) # Makes charts look better
+library(forcats)      # Helps Order viz in pleasing ways
+library(knitr)  
+library(naniar) 
+``` 
+
+To start, will upload the .csv file containing demographic information for each patient.
+
+```{r}
+demo <- read_csv("../data/Demographics.csv")
+dim(demo) #checking n   
+#delete later
+table(demo$psych_adherence) 
+855/(855+978)
+``` 
+
+### Inclusion criteria: Patient must not be archived 
+```{r} 
+archive <- demo %>% 
+  filter(`tblPatient::archive` == 1) #saving which patients are archived
+demo <- demo %>% 
+  filter(is.na(demo$`tblPatient::archive`)) #if NA, patient is not archived 
+dim(demo)  #checking n
+```
+
+1,834 patient observations were read in. We started by excluding all archived patients (n=34), leaving us with a sample of 1,800.
+
+### Inclusion criteria: Patient must have BIPQ score data
+
+We will read in the datafile containing BIPQ data (which contains reverse-coded values for appropriate items and total sum scores that were calculated in Excel). 
+```{r}
+bipq <- read_csv("../data/BIPQBaseline.csv")
+
+bipq <- bipq %>% 
+  select(-brief_control, -brief_treat, -brief_understand) %>% #getting rid of raw data for reverse scored items 
+  rename(brief_control = control_reverse, #renaming reverse-coded
+         brief_treatment = treatment_reverse,
+         brief_understand = understand_reverse) %>% 
+  rename_with(
+    ~ str_remove(.x, "^brief_"),
+    .cols = -total_score
+  ) 
+
+df <- inner_join(demo, bipq, by = "ID") #inner joining
+dim(df) 
+``` 
+The dataset now contains 485 observations. We originally had 487 observations in the BIPQ dataset. The reason these observations were dropped is because those patients were archived, meaning they had no ID match in the `df` dataframe and did not meet inclusion criteria. Below is some code used to look at which two observations were dropped, which I then cross-reference with my archived list to ensure that all observations that were dropped are accounted for. 
+
+```{r}
+bipq %>% 
+  anti_join(demo, by = "ID") %>% 
+  select(ID) #the two observations that were dropped
+
+archive %>% #checking my archived patient list
+  filter(ID %in% c(3843, 4095)) 
+```
+
+
+
+### Inclusion criteria: Patient must have FS/NES
+There are 3 patients that upon patient chart review we have ascertained are ineligble for this study because they were treated for FND weakness/paralysis or purely functional movement symptoms. As one of the primary predictors for this study will be the frequency of seizures at baseline, we will exclude these patients from the study.
+
+```{r}
+df <- df %>% 
+  filter(!(ID %in% c("3636", "5498", "3799", "3751")))
+df %>% 
+  nrow()
+```
+Our sample size is now  482. 
+
+## Adding medical history  
+I am now adding on medical history. Note-- I will be excluding conditions that are explicitly coded as not being present at intake. The others are either coded as "yes", "unknown", or missing [being present]. This field is problematic due to inconsistencies in data reporting from the clinic interns, and we end up losing a lot of conditions due to how some of these are coded (which is mostly due to human error). If the medical history is present in each patient's history, it was mentioned by them at intake, so we will consider them impactful enough to include (unless they specified that it was a past condition.)
+```{r}
+#### comorbidities 
+medhx <- read.csv("../data/MedHx.csv")
+
+medhx <- medhx %>% #excluding conditions that aren't present at intake
+  filter(conditionIntake != "No")
+
+medcount <- medhx %>% 
+  rename(ID = patient_id) %>% 
+  group_by(ID) %>% 
+  summarize(
+    total_conditions = n(),
+    psych_count     = sum(diagnosisClass == "Psych", na.rm = TRUE),
+    neuro_count     = sum(diagnosisClass == "Neuro", na.rm = TRUE),
+    physical_count  = sum(diagnosisClass == "Physical", na.rm = TRUE)
+  )
+ 
+
+df <- df %>% #adding conditions to df
+  left_join(medcount, by = "ID") 
+```
+
+# Data cleaning 
+Before I continue looking at inclusion and exclusion according to specific variables, I need to do some data cleaning. There are a couple of variables I know I can remove and want to rename: 
+```{r}
+df <- df %>% 
+  select(-`tblPatient::archive`, -completedPsychIntakeDate, -`tblPatient::EXT_ID`, -...27) #removing unecessary columns from excel
+#renaming variables  
+colnames(df) <- str_to_lower(colnames(df)) #lowercase column 
+colnames(df)
+ df <- df%>% #renaming cols to have consistent conventions
+  rename(race = `tblpatient::race`,
+         nes_es = neses,
+         substance_use = substanceuse,
+         total_aed = totalaed,
+         age = currentage,
+         trauma_hx = traumahx,
+         suicidality = thoughtsuicideattempt,
+         insurance = c_insuranceatbaseline,
+         employment = c_employmentatbaseline,
+         driving = c_drivingatbaseline,
+         marital_status = maritalstatus,
+         psych_care_entered = psychcareentered,
+         t_onset_diagnosis = `tblfnd::c_timebetweenonsetanddiagnosismonths`,
+         n_visits_scheduled = scheduledattemptedvisitstotal,
+         n_visits_completed = totalvisitscompleted,
+         ) 
+colnames(df) 
+``` 
+
+### Insurance 
+
+# Let's start with insurance
+I need to recode a lot of these to make it clear which insurance group they belong to: 
+```{r}
+df <- df %>%
+  mutate(insurance = case_when(grepl("Anthem|Anthem/Anthem BC/BS Local PPO|Anthem Federal/Anthem BC BS Federal|UCHealth Anthem|Anthem/Anthem BC/BS|Anthem BC/BS|Anthem Pathway|Anthem TRX BDCT NM POB|Anthem BCBS|UCHealth Anthem BC/BS|Anthem Mountain Enhanced|Anthem Federal|CU Anthem|Anthem BC/BS of California|Anthem Federal BC/BS|ANTHEM BC/BS FEDERAL PPO|Anthem BCBS WY|UC Health Anthem|Anthem CU|Anthem bc/bs|CU Med|United/United Healthcare Choice|United|United/UMR POS|United UMR PPO|United/United Health Choice Plus|United Healthcare Choice Plus|United Healthcare Choice|United Healthcare|United UMR|UHC Choice Plus|united|United/Nreca|Rocky Mountain Health Plan|Rocky Mountain Health Plans|Rocky Mountain Health|RMHP|Rocky Mtn Health Plan|RMHP United|Cigna/Cigna Local plus|Cigna/Cigna POS|Great West/Cigna|Great West|Cigna PPO|Cigna POS|cigna|Great West - Cigna|Aetna|AETNA|Aetna Whole Health|Aetna and Cofinity|Aetna POS", insurance, ignore.case = TRUE) ~ "Private",
+                               
+                               grepl("Medicaid|Medicaid Health First|Medicaid/Medicaid health first|Colorado Access Medicaid/CO Access BH|Colorado Health First|Medicaid Health First|Out of state Medicaid|Colorado Medicaid/Medicaid Colorado Health First|Rocky Mountain Health Plan Medicaid|Denver Health Medicaid|Medicaid Colorado Health First RAE 2|CO Health First|Colorado Community Health Alliance|Colorado Medicaid Health First RAE5|Colorado Medicaid RAE 3|rae 3|Colorado Medicaid|Health Colorado- RAE 4|Medicaid - Colorado Community Health Alliance|Medicaid RAE 3|Texas Medicaid|Out of State Medicaid|Health Colorado, Inc.|Health First|Colorado Access|Health first|COLORADO HEALTH FIRST|CHF Community Health Alliance|CHA|Colorado Medicaid CCHA|Colorado health first|RAE 5|RAE 2|RAE 3|rae 5|UNLISTED MC|DENVER HEALTH MEDICAID|MEDICAID COLORADO HEALTH FIRST|RAE 4|comm Health|Comm Health Alliance|MMHP United Medicaid|Colorado Health First - RAE3|CO CHA|CHF Community Alliance|CHF RAE 3|comm health alli|CHF Region 5|CHF region 3|CHF RAE Region 3|Comm Health Alli|CCHA|Community Health Alliance|ER Health First|WY Medicaid|ROCKY MOUNTAIN HEALTH PLAN MC", insurance, ignore.case = TRUE) ~ "Medicaid/CHF",
+                               
+              
+                               
+                               grepl("Medicare/Medicare A and B|Medicare|Medicare A and B|United/Medicare|Humana Medicare|Humana medicare|Denver Health Medicare|A & B|A&B|Medicare A&B|A &B|A and B|part A only|Humana/Medicare|Kaiser Medicare|Medicare/Anthem|United Medicare/United Healthcare|Medicare/United|United Medicare|UNITED HEALTHCARE MC DUAL COMPLETE HMO|Cigna Medicare|Aetna/Medicare", insurance, ignore.case = TRUE) ~ "Medicare",
+                               
+                               
+                               
+                               grepl("Tricare|VA Administration|Triwest Healthcare|Triwest|Va Veteran's Administration|Tricare Health Net Prime_West|Tricare Health Net West|TriWest|tricare health net|VA|TriCare", insurance, ignore.case = TRUE) ~ "Veteran/ASM",
+                               
+                               TRUE ~ "Other"  # Default category for everything else
+  ))
+
+plot1 <- ggplot(df, aes(x = fct_rev(fct_infreq(insurance)), fill = insurance)) +
+  geom_bar() +
+  scale_fill_brewer(palette = "Set3") +
+  theme_minimal() +
+  labs(title = "Insurance Distributions", x = "Insurance Plans", y = "Number of Patients") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))  
+ggplotly(plot1)   # Convert to interactive plotly chart
+```
+
+###Race  
+Due to the limited distribution of racial groups within the clinic, we are going to create a binary race indicator for White or Other: 
+```{r}
+df <- df %>%
+  mutate(race_binary = case_when(
+    grepl("White", race, ignore.case = TRUE) ~ "White",
+    
+    TRUE ~ "Other"  # Default category for everything else
+  ))   
+plot2 <- ggplot(df, aes(x = fct_rev(fct_infreq(race_binary)), fill = race_binary)) +
+  geom_bar() +
+  scale_fill_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = "Race Distributions", x = "Race Binary Variable", y = "Number of Patients") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))  
+ggplotly(plot2)   # Convert to interactive plotly chart
+```
+
+
+### Disability 
+We need to recode disability to indicate when someone is not on Disability versus when they are: 
+```{r}
+df <- df %>%
+  mutate(disability = case_when(
+    grepl("Not Pursuing|Denied|SS Denied|Interested|Pursuing|Retired", disability_type, ignore.case = TRUE) ~ "No Disability",
+    
+    TRUE ~ "Disability"  # Default category for everything else
+  )) %>% 
+  select(-disability_type) #removing the old variable
+
+
+plot4 <- ggplot(df, aes(x = fct_rev(fct_infreq(disability)), fill = disability)) +
+  geom_bar() +
+  scale_fill_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = "Disability Status", y = "Number of Patients") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))  
+ggplotly(plot4) 
+```
+ 
+
+##Onset/Dx time (Months)
+
+I want to look at the time between symptom onset and diagnosis. Currently the variable is a string. Let's assess the unique values to make sure conversion to a double is feasible.
+
+```{r}
+unique(df$t_onset_diagnosis)
+```
+Ok, so everything can be an integer. But we'll need to switch a couple of things. First off, it looks like the time in months isn't consistent in this dataset. Some of the values are input as days. It looks like everything greater than |20,000| needs to be divided by 31.
+
+```{r}
+df$t_onset_diagnosis <- as.numeric(df$t_onset_diagnosis)
+``` 
+
+```{r}
+# Divide the observations that have an absolute value greater than 20000 by 31
+df$t_onset_diagnosis <- ifelse(abs(df$t_onset_diagnosis) > 20000, df$t_onset_diagnosis / 31, df$t_onset_diagnosis)
+
+# Now make all observations below 20000 absolute values:
+df$t_onset_diagnosis <- abs(df$t_onset_diagnosis)
+
+# Review of all unique entries
+unique(df$t_onset_diagnosis)
+```
+
+## Trauma 
+
+```{r}
+df$trauma_hx <- ifelse(df$trauma_hx == "Yes", 1, 0)
+summary(df$trauma_hx)
+```
+
+## Baseline frequency 
+
+The value of freqBaseline is different based on the category in baselineFreq. So first, we'll change the values to numeric, then we can alter the values to be monthly. 
+
+```{r}
+
+#First, let's change baseline amount to numeric. 
+#we have some values that are "UN", need to take care of them first 
+df$freqbaseline[df$freqbaseline == "UN"] <- NA
+df$freqbaseline <- readr::parse_number(df$freqbaseline)
+
+unique(df$freqbaseline)
+table(df$baselinefrequnit)
+
+df <- df %>%
+  mutate(
+    freqbaseline_monthly = case_when(
+      baselinefrequnit %in% c("Day", "day")  ~ freqbaseline * 30.4,
+      baselinefrequnit %in% c("Week", "week") ~ freqbaseline * 4.345,
+      baselinefrequnit %in% c("Month", "month") ~ freqbaseline,
+      baselinefrequnit %in% c("Year", "year") ~ freqbaseline * 12,
+      TRUE ~ NA_real_    # "Time" or anything unclear
+    )
+  )
+summary(df$freqbaseline_monthly)
+table(df$baselinefrequnit, useNA = "ifany")
+
+
+# The max value of 2280.00 seems odd, let's check the unique values and see what subject this is.
+unique(df$freqbaseline)
+which(df$freqbaseline_monthly >= 1000) 
+
+hist(df$freqbaseline_monthly)
+# Ok, so we are finding that there are a few patients that have exceptionally high amounts. These are correct looking through EPIC, they just have abnormal seizures or mixed FND where they have many symptoms for short bursts all the time. For our purposes I will be moving them to N/A in order to better see the data. I am going to record their information so we can see what they were prior to censoring.
+df %>% 
+  slice(463,481) %>% 
+  select(baselinefrequnit,freqbaseline, freqbaseline_monthly)
+# Subject 463: 50/day
+# Subject 481: 75/day
+
+# This will censor these values as they are all over 1000. This can be disregarded if these patient's values are correct.
+df$freqbaseline_monthly <- ifelse(df$freqbaseline_monthly > 1000, NA, df$freqbaseline_monthly) 
+
+#now we will drop the other frequency variables to simplify the dataset 
+df <- df %>% 
+  select(-freqbaseline, -baselinefrequnit) 
+
+```
+
+## Treatment adherence 
+
+We have a simple yes/no that we can use after we have made it into a factor, but I am also interested in looking at their attendance rate. 
+
+```{r}
+df <- df %>%
+  mutate(
+    psych_adherence_num = case_when(
+      psych_adherence == "No" ~ 0,
+      psych_adherence == "Yes" ~ 1
+    ),
+    psych_adherence_num = factor(psych_adherence_num,
+                                 levels = c(0, 1),
+                                 labels = c("No", "Yes"))
+  )
+#Start by dividing the number of scheduled visits to the number of completed visits:
+df$visit_prop <- (df$n_visits_completed / df$n_visits_scheduled)
+
+table(df$visit_prop)
+hist(df$visit_prop)
+
+# Ok, now I want to find the number of patients that have a completion ratio of greater than 50%
+df$visit_complete_50 <- ifelse(is.na(df$visit_prop), NA, ifelse( df$visit_prop > 0.50, 1, 0))
+
+# Let's label the values to make it easier to read
+df$visit_complete_50 <- factor(df$visit_complete_50, 
+                             levels = c(0,1), 
+                             labels = c("<50%", ">50%"))
+
+prop.table(table(df$visit_complete_50))
+table(df$visit_complete_50)
+```
+## Marital Status 
+We want to simplify this and make it clearly just if patient actively has a partner vs. doesn't: 
+```{r}
+df <- df %>% 
+  mutate(marital_status = case_when(
+      marital_status %in% c("Single") ~ "Single",
+      marital_status %in% c("Married", "Engaged", "Significant other", 
+                            "Divorced", "Separated", "Widowed") ~ "Has_Partner",
+      TRUE ~ NA_character_  # covers "Unknown" or other missing categories
+    ))
+
+```
+
+
+### Cleaning up inconsistent data and "Unknowns" 
+```{r}
+df <- df %>%
+  mutate(
+    suicidality = case_when(
+      suicidality %in% c("Yes", "yes", "1") ~ "Yes",
+      suicidality %in% c("No", "no", "2") ~ "No",
+      TRUE ~ NA_character_
+    ), 
+    psych_care_entered = tolower(psych_care_entered),
+    psych_care_entered = case_when(
+      psych_care_entered %in% c("yes") ~ "Yes",
+      psych_care_entered %in% c("no")  ~ "No",
+      TRUE ~ NA_character_
+    ), 
+     driving = case_when(
+      driving %in% c("Driving", "Yes") ~ "Yes",
+      driving %in% c("Not driving")    ~ "No",
+      TRUE ~ NA_character_
+    ),
+    across(c(substance_use, nes_es, veteran), ~na_if(.x, "Unknown")), 
+   employment = case_when(
+    employment %in% c("Employed", "Active Duty") ~ "Employed",
+    employment %in% c("Retired", "Student") ~ "Not in labor force",
+    employment == "Unemployed" ~ "Unemployed",
+    employment == "Unknown" ~ "Missing",
+    is.na(employment) ~ "Missing"
+  ))
+  
+
+#need to fix Veteran, employment, education
+```
+
+
+```{r}  
+df <-  df %>% #reclassifying factor variables
+  mutate(gender = factor(gender, 
+                         levels = c("Male", "Female", "Other")),
+         substance_use= factor(substance_use,
+                               levels =c("No","Yes")),
+         nes_es = factor(nes_es, 
+                        levels= c("No","Yes")),
+         veteran=factor(veteran, 
+                        levels=c("No","Yes")),
+        psych_care_entered=factor(psych_care_entered, 
+                                 levels=c("No","Yes")),
+         disability=factor(disability,
+                                  levels=c("No Disability","Disability")),
+         psych_adherence=factor(psych_adherence, 
+                                        levels=c("No","Yes")),
+         education3 = case_when(
+      education %in% c("< High School", "High School Diploma") ~ "≤12 years",
+      education %in% c("Some college", "Partial College or 2 Year Degree", "4 Year College Degree") ~ "13–16 years",
+      education %in% c("Graduate or Professional Degree") ~ "≥17 years",
+      TRUE ~ NA_character_
+    ),
+      trauma_hx = factor(trauma_hx,
+                         levels=c(0,1),
+                         labels=c("No History of Trauma", "History of Trauma")),
+    driving = factor(driving, 
+                     levels =c("No", "Yes"))) 
+
+#make driving and substance use numeric
+df <- df %>%
+  mutate(
+    substance_use_num = ifelse(substance_use == "Yes", 1, 0),
+    driving_num       = ifelse(driving == "Yes", 1, 0)
+  )
+   
+```
+
+# Missing data 
+```{r}
+vis_miss(df) 
+#missing 2.4% overall 
+gg_miss_var(df) #marital, veteran, comorbid and medhx most common
+gg_miss_upset(df) 
+observations_with_missing_data <- df[!complete.cases(df), ] 
+
+
+#creating an excel sheet with it?? 
+library(writexl)
+write_xlsx(
+      observations_with_missing_data,
+      "../data/missing_data.xlsx",
+      col_names = TRUE,       # Include column names in the Excel file
+      format_headers = TRUE   # Format headers (e.g., bold and centered)
+    )
+```
+
+
+# BIPQ Scoring
+
+One option we investigated was the use of validated cutoff points. However, it should be noted that these cutoff points were validated among a sample of patients with recently acquired spinal cord injury. Due to the physical vs. mental difference in these diseases, as well as the potential difference in chronicity, we are going to opt for a "low" vs. "high" score threshold. 
+
+I will also fit a model that just looks at total sum score as an integer. 
+```{r}
+df <- df %>%
+  mutate(
+    score_cat = ifelse(
+      total_score <= median(total_score, na.rm = TRUE),
+      "Low", 
+      "High"
+    )
+  ) 
+table(df$score_cat) 
+```
+
+
+
+### Saving cleaned dataset 
+
+```{r}
+
+write.csv(df, "../data/bipq_clean.csv", row.names = TRUE)
+
+```
+
+
+
