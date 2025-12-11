@@ -326,6 +326,12 @@ summary(visit_mod)
 #getting the equation for this model
 extract_eq(visit_mod) 
 
+#cohen's d calculation: 
+beta <- coef(visit_mod)["score_levelHigh"]
+sd_resid <- sqrt(summary(visit_mod)$dispersion)
+d <- beta / sd_resid
+d
+
 #inflated std error: 
 
 # cluster-robust covariance matrix
