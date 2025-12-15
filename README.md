@@ -2,8 +2,7 @@
 This dataset contains demographic and clinical characteristics from the 
 electronic health records of patients who were referred to and scheduled 
 at the CU Functional Neurological Disorders Clinic between April 1, 2020 and
-April 1, 2025. All patients have been de-identified in excel prior to import,
-and the study team has approved the use of this data for this activity. 
+April 1, 2025. All patients have been de-identified in excel prior to import.
 
 There are data on 485 patients who completed the Brief Illness Perceptions 
 Questionnaire (BIPQ). The primary outcome of this dataset are each patients' 
