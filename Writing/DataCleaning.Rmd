@@ -459,7 +459,6 @@ table(df$score_cat)
 ```{r}
 
 write.csv(df, "../data/bipq_clean.csv", row.names = TRUE)
-
 ```
 
 
